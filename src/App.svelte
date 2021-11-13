@@ -240,7 +240,14 @@
 <main>
   <canvas bind:this={canvas} />
   <div class="actions">
-    <button on:click={() => drawBoxes(scale)}> Clear </button>
+    <button
+      on:click={() => {
+        boxes = [];
+        drawBoxes(scale);
+      }}
+    >
+      Clear
+    </button>
     {#if gameTimeoutId}
       <button on:click={handlePause}> Pause Game </button>
     {:else}
