@@ -6,7 +6,7 @@
   let drawing: boolean = false;
   let mouseDown: boolean = false;
 
-  let boxes: Array<Array<0 | 1>> = [];
+  let boxes: Array<string> = [];
 
   let gameFPS: number = 10;
   let scale: number = 10;
@@ -39,6 +39,8 @@
     return () => window.removeEventListener("resize", handleResize);
   });
 
+  const getKey = (x: number, y: number) => x + "/" + y;
+
   const drawBox = (
     idx1: number,
     idx2: number,
@@ -61,11 +63,7 @@
     context.strokeRect(x, y, scale, scale);
   };
 
-  let lastTotalPossibleBoxes: null | { h: number; v: number } = null;
-  const drawBoxes = async (
-    scale: number,
-    passedBoxes?: Array<Array<0 | 1>>
-  ) => {
+  const drawBoxes = async (scale: number, passedBoxes?: Array<string>) => {
     if (!canvas) {
       await tick();
     }
@@ -82,20 +80,13 @@
       v: Math.floor((canvas.height - 60) / scale),
     };
 
-    let updated = false;
+    for (let idx1 = 0; idx1 < totalPossibleBoxes.h; idx1++) {
+      for (let idx2 = 0; idx2 < totalPossibleBoxes.v; idx2++) {
+        const updatedValue = passedBoxes?.includes(getKey(idx1, idx2)) ? 1 : 0;
 
-    const newBoxes = Array(totalPossibleBoxes.h)
-      .fill([])
-      .map((_, idx1) => {
-        return Array(totalPossibleBoxes.v)
-          .fill(0)
-          .map((alive, idx2) => {
-            drawBox(idx1, idx2, passedBoxes?.[idx1]?.[idx2] || 0, scale);
-            return passedBoxes?.[idx1]?.[idx2] || 0;
-          });
-      });
-
-    boxes = newBoxes;
+        drawBox(idx1, idx2, updatedValue, scale);
+      }
+    }
   };
 
   const onMouseDown = () => {
@@ -128,9 +119,13 @@
     const y = Math.floor(e.offsetY / scale);
 
     if (lastMouseX !== x || lastMouseY !== y) {
-      boxes = boxes.map((hBoxes, idx1) =>
-        hBoxes.map((box, idx2) => (idx1 === x && idx2 === y ? 1 : box))
-      );
+      const key = getKey(x, y);
+
+      boxes = [
+        ...new Set(
+          boxes.includes(key) ? boxes.filter((k) => k !== key) : [...boxes, key]
+        ),
+      ];
 
       lastMouseX = x;
       lastMouseY = y;
@@ -158,32 +153,75 @@
     const getAliveNeighbours = (idx1, idx2) => {
       let result = 0;
       [-1, 0, +1].forEach((direction) => {
-        result += boxes?.[idx1 + direction]?.[idx2 - 1];
+        result += boxes?.includes(getKey(idx1 + direction, idx2 - 1)) ? 1 : 0;
         if (direction !== 0) {
-          result += boxes?.[idx1 + direction]?.[idx2 + 0] || 0;
+          result += boxes?.includes(getKey(idx1 + direction, idx2 + 0)) ? 1 : 0;
         }
-        result += boxes?.[idx1 + direction]?.[idx2 + 1];
+        result += boxes?.includes(getKey(idx1 + direction, idx2 + 1)) ? 1 : 0;
       });
 
       return result;
     };
 
     const paintNext = () => {
-      const newBoxes = boxes.map((hboxes, idx1) =>
-        hboxes.map((box, idx2): 0 | 1 => {
+      const { lx, ly, hx, hy } = boxes.reduce(
+        ({ lx, ly, hx, hy }, key) => {
+          let nlx = lx,
+            nly = ly,
+            nhx = hx,
+            nhy = hy;
+
+          let x = parseInt(key.split("/")[0]);
+          let y = parseInt(key.split("/")[1]);
+
+          if (lx === null) {
+            nlx = x;
+            nhx = x;
+            nly = y;
+            nhy = y;
+          }
+
+          if (x < lx) {
+            nlx = x;
+          }
+          if (x > hx) {
+            nhx = x;
+          }
+          if (y < ly) {
+            nly = y;
+          }
+          if (y > hy) {
+            nhy = y;
+          }
+
+          return {
+            lx: nlx,
+            ly: nly,
+            hx: nhx,
+            hy: nhy,
+          };
+        },
+        { lx: null, hx: null, ly: null, hy: null } as {
+          [key: string]: null | number;
+        }
+      );
+
+      let newBoxes = [];
+
+      for (let idx1 = lx - 2; idx1 < hx + 2; idx1++) {
+        for (let idx2 = ly - 2; idx2 < hy + 2; idx2++) {
           const aliveNeighbours = getAliveNeighbours(idx1, idx2);
 
-          if (box === 1 && aliveNeighbours > 1 && aliveNeighbours < 4) {
-            return 1;
+          if (
+            (!boxes.includes(getKey(idx1, idx2)) && aliveNeighbours === 3) ||
+            (boxes.includes(getKey(idx1, idx2)) &&
+              aliveNeighbours > 1 &&
+              aliveNeighbours < 4)
+          ) {
+            newBoxes = [...newBoxes, getKey(idx1, idx2)];
           }
-
-          if (box === 0 && aliveNeighbours === 3) {
-            return 1;
-          }
-
-          return 0;
-        })
-      );
+        }
+      }
 
       boxes = newBoxes;
 
