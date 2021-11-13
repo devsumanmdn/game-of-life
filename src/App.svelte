@@ -173,7 +173,11 @@
         hboxes.map((box, idx2): 0 | 1 => {
           const aliveNeighbours = getAliveNeighbours(idx1, idx2);
 
-          if (aliveNeighbours > 1 && aliveNeighbours < 3) {
+          if (box === 1 && aliveNeighbours > 1 && aliveNeighbours < 4) {
+            return 1;
+          }
+
+          if (box === 0 && aliveNeighbours === 3) {
             return 1;
           }
 
@@ -279,7 +283,7 @@
     label {
       display: inline-flex;
       flex-direction: column;
-      color: #FFFFFFBB;
+      color: #ffffffbb;
       span {
         line-height: 20px;
       }
