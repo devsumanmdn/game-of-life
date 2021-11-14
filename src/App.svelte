@@ -12,6 +12,9 @@
   let scale: number = 10;
   const boxBorderWidth = 1;
 
+  let movedPixels: { x: number; y: number } = { x: 0, y: 0 };
+  let moveMode: boolean = false;
+
   let gameTimeoutId: NodeJS.Timeout | null = null;
 
   const drawCanvasBorder = (): void => {
@@ -57,36 +60,71 @@
 
     if (alive) {
       context.fillStyle = "#FFFFFFAA";
-      context.fillRect(x, y, scale, scale);
+    } else {
+      context.fillStyle = "#000000";
     }
 
+    context.fillRect(x, y, scale, scale);
     context.strokeRect(x, y, scale, scale);
   };
 
-  const drawBoxes = async (scale: number, passedBoxes?: Array<string>) => {
+  let lastPaintedBoxes: Array<string> = [];
+  let lastScale: number;
+  // let lastMovedPixels: { x: number; y: number };
+  // let paintedEmpty: boolean = false;
+
+  const drawBoxes = async (
+    scale: number,
+    passedBoxes?: Array<string>,
+    movedPixels?: null | { x: number; y: number },
+    optimisePainting: boolean = false
+  ) => {
     if (!canvas) {
       await tick();
     }
 
     const context = canvas.getContext("2d");
 
-    context.clearRect(0, 0, canvas.width, canvas.height);
+    const scaleUpdated = scale !== lastScale;
+    if (!optimisePainting) {
+      await tick();
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#000000";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
-    context.fillStyle = "#000000";
-    context.fillRect(0, 0, canvas.width, canvas.height);
 
     const totalPossibleBoxes = {
       h: Math.floor(canvas.width / scale),
       v: Math.floor((canvas.height - 60) / scale),
     };
 
+    const paintedBoxes = [];
+
     for (let idx1 = 0; idx1 < totalPossibleBoxes.h; idx1++) {
       for (let idx2 = 0; idx2 < totalPossibleBoxes.v; idx2++) {
-        const updatedValue = passedBoxes?.includes(getKey(idx1, idx2)) ? 1 : 0;
+        const updatedValue = passedBoxes?.includes(
+          getKey(idx1 - (movedPixels?.x || 0), idx2 - (movedPixels?.y || 0))
+        )
+          ? 1
+          : 0;
 
-        drawBox(idx1, idx2, updatedValue, scale);
+        if (updatedValue) {
+          paintedBoxes.push(getKey(idx1, idx2));
+        }
+
+        if (
+          !optimisePainting ||
+          !!updatedValue !== lastPaintedBoxes.includes(getKey(idx1, idx2))
+        ) {
+          drawBox(idx1, idx2, updatedValue, scale);
+        }
       }
     }
+
+    lastPaintedBoxes = paintedBoxes;
+    // lastMovedPixels = movedPixels;
+    lastScale = scale;
   };
 
   const onMouseDown = () => {
@@ -118,8 +156,18 @@
     const x = Math.floor(e.offsetX / scale);
     const y = Math.floor(e.offsetY / scale);
 
-    if (lastMouseX !== x || lastMouseY !== y) {
-      const key = getKey(x, y);
+    if (moveMode) {
+      if ((lastMouseX !== x || lastMouseY !== y) && lastMouseX && lastMouseY) {
+        movedPixels = {
+          x: movedPixels.x - (lastMouseX - x),
+          y: movedPixels.y - (lastMouseY - y),
+        };
+      }
+
+      lastMouseX = x;
+      lastMouseY = y;
+    } else if (lastMouseX !== x || lastMouseY !== y) {
+      const key = getKey(x - movedPixels.x, y - movedPixels.y);
 
       boxes = [
         ...new Set(
@@ -140,88 +188,80 @@
     if (mouseDown) {
       window.addEventListener("mousemove", onMouseMove);
     } else {
+      lastMouseX = null;
+      lastMouseY = null;
       window.removeEventListener("mousemove", onMouseMove);
     }
   };
 
-  $: handleDrawChange(drawing);
+  const callDrayBoxes = (s, b, m, o) =>
+    drawBoxes(s || scale, b || boxes, m || movedPixels, o);
+
+  $: handleDrawChange(drawing || moveMode);
   $: handleMouseDownChange(mouseDown);
 
-  $: drawBoxes(scale, boxes);
+  $: callDrayBoxes(scale, undefined, undefined, false);
+
+  $: callDrayBoxes(undefined, boxes, movedPixels, true);
+
+  let boxesToCalculate: Array<string> = [];
 
   const startGame = () => {
     const getAliveNeighbours = (idx1, idx2) => {
-      let result = 0;
+      const neighborsKeys = [];
       [-1, 0, +1].forEach((direction) => {
-        result += boxes?.includes(getKey(idx1 + direction, idx2 - 1)) ? 1 : 0;
+        neighborsKeys.push(getKey(idx1 + direction, idx2 - 1));
+
         if (direction !== 0) {
-          result += boxes?.includes(getKey(idx1 + direction, idx2 + 0)) ? 1 : 0;
+          neighborsKeys.push(getKey(idx1 + direction, idx2 + 0));
         }
-        result += boxes?.includes(getKey(idx1 + direction, idx2 + 1)) ? 1 : 0;
+        neighborsKeys.push(getKey(idx1 + direction, idx2 + 1));
       });
 
-      return result;
+      const aliveNeighbours = neighborsKeys.reduce(
+        (acc, neighbor) => acc + (boxes?.includes(neighbor) ? 1 : 0),
+        0
+      );
+      return { aliveNeighbours, neighborsKeys };
     };
 
+    let initialBoxesToCalculate = [];
+    boxes.forEach((box) => {
+      const [idx1, idx2] = box.split("/").map((num) => parseInt(num));
+
+      const { neighborsKeys } = getAliveNeighbours(idx1, idx2);
+
+      initialBoxesToCalculate.push(...neighborsKeys);
+    });
+
+    initialBoxesToCalculate = [...new Set([...initialBoxesToCalculate])];
+
     const paintNext = () => {
-      const { lx, ly, hx, hy } = boxes.reduce(
-        ({ lx, ly, hx, hy }, key) => {
-          let nlx = lx,
-            nly = ly,
-            nhx = hx,
-            nhy = hy;
-
-          let x = parseInt(key.split("/")[0]);
-          let y = parseInt(key.split("/")[1]);
-
-          if (lx === null) {
-            nlx = x;
-            nhx = x;
-            nly = y;
-            nhy = y;
-          }
-
-          if (x < lx) {
-            nlx = x;
-          }
-          if (x > hx) {
-            nhx = x;
-          }
-          if (y < ly) {
-            nly = y;
-          }
-          if (y > hy) {
-            nhy = y;
-          }
-
-          return {
-            lx: nlx,
-            ly: nly,
-            hx: nhx,
-            hy: nhy,
-          };
-        },
-        { lx: null, hx: null, ly: null, hy: null } as {
-          [key: string]: null | number;
-        }
-      );
-
       let newBoxes = [];
 
-      for (let idx1 = lx - 2; idx1 < hx + 2; idx1++) {
-        for (let idx2 = ly - 2; idx2 < hy + 2; idx2++) {
-          const aliveNeighbours = getAliveNeighbours(idx1, idx2);
+      const nextBoxesToCalculate = [];
+      (boxesToCalculate.length
+        ? boxesToCalculate
+        : initialBoxesToCalculate
+      ).map((box) => {
+        const [idx1, idx2] = box.split("/").map((num) => parseInt(num));
+        const { aliveNeighbours, neighborsKeys } = getAliveNeighbours(
+          idx1,
+          idx2
+        );
 
-          if (
-            (!boxes.includes(getKey(idx1, idx2)) && aliveNeighbours === 3) ||
-            (boxes.includes(getKey(idx1, idx2)) &&
-              aliveNeighbours > 1 &&
-              aliveNeighbours < 4)
-          ) {
-            newBoxes = [...newBoxes, getKey(idx1, idx2)];
-          }
+        if (
+          (!boxes.includes(getKey(idx1, idx2)) && aliveNeighbours === 3) ||
+          (boxes.includes(getKey(idx1, idx2)) &&
+            aliveNeighbours > 1 &&
+            aliveNeighbours < 4)
+        ) {
+          newBoxes = [...newBoxes, getKey(idx1, idx2)];
+          nextBoxesToCalculate.push(...neighborsKeys);
         }
-      }
+      });
+
+      boxesToCalculate = [...new Set([...nextBoxesToCalculate])];
 
       boxes = newBoxes;
 
@@ -233,6 +273,7 @@
 
   const handlePause = () => {
     window.clearTimeout(gameTimeoutId);
+    boxesToCalculate = [];
     gameTimeoutId = null;
   };
 </script>
@@ -253,6 +294,9 @@
     {:else}
       <button on:click={startGame}> Start Game </button>
     {/if}
+    <button class:selected={moveMode} on:click={() => (moveMode = !moveMode)}
+      >Move</button
+    >
 
     <label>
       <span>
@@ -315,8 +359,14 @@
       transition-duration: 0.3s;
       width: 160px;
 
+      &.selected {
+        border: #aaaaaa 2px solid;
+        color: #000000;
+        background-color: #ffffff;
+      }
+
       &:hover,
-      &:focus {
+      &:focus:not(.selected) {
         background-color: #fff5;
 
         &:focus {
